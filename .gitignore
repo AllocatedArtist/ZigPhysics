@@ -1,0 +1,3 @@
+*.zon
+zig-out
+.zig-cache
