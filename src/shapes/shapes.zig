@@ -167,38 +167,33 @@ pub const Triangle = struct {
 };
 
 pub const Sphere = struct {
-    center: rl.Vector3,
     radius: f32,
 
-    pub fn init(center: rl.Vector3, radius: f32) Sphere {
-        return .{ .center = center, .radius = radius };
+    pub fn init(radius: f32) Sphere {
+        return .{ .radius = radius };
     }
 
     pub fn getRadius(self: *const Sphere) f32 {
         return self.radius;
     }
 
-    pub fn getCenter(self: *const Sphere) rl.Vector3 {
-        return self.center;
-    }
-
-    pub fn rayIntersectSphere(self: *const Sphere, ray: rl.Ray) rl.RayCollision {
-        const dir = self.center.subtract(ray.position);
+    pub fn rayIntersectSphere(self: *const Sphere, ray: rl.Ray, position: rl.Vector3) rl.RayCollision {
+        const dir = position.subtract(ray.position);
         const proj = dir.dotProduct(ray.direction);
         const p = ray.position.add(ray.direction.scale(proj));
 
-        const dist2 = self.center.subtract(p).lengthSqr();
+        const dist2 = position.subtract(p).lengthSqr();
         const radius2 = self.radius * self.radius;
 
         var hit = rl.RayCollision{ .hit = false, .distance = 0.0, .point = rl.Vector3.zero(), .normal = rl.Vector3.zero() };
 
         if (dist2 <= radius2) {
-            const l2 = p.subtract(self.center).lengthSqr();
+            const l2 = p.subtract(position).lengthSqr();
             const d = std.math.sqrt(radius2 - l2);
             hit.distance = p.subtract(ray.position).length() - d;
             hit.hit = true;
             hit.point = ray.position.add(ray.direction.scale(hit.distance));
-            hit.normal = hit.point.subtract(self.center).normalize();
+            hit.normal = hit.point.subtract(position).normalize();
         }
 
         return hit;
@@ -206,32 +201,27 @@ pub const Sphere = struct {
 };
 
 pub const AABB = struct {
-    center: rl.Vector3,
     half_extents: rl.Vector3,
 
-    pub fn init(center: rl.Vector3, half_extents: rl.Vector3) AABB {
-        return .{ .center = center, .half_extents = half_extents };
-    }
-
-    pub fn getCenter(self: *const AABB) rl.Vector3 {
-        return self.center;
+    pub fn init(half_extents: rl.Vector3) AABB {
+        return .{ .half_extents = half_extents };
     }
 
     pub fn getSize(self: *const AABB) rl.Vector3 {
         return self.half_extents.scale(2);
     }
 
-    pub fn getMin(self: *const AABB) rl.Vector3 {
-        return self.center.subtract(self.half_extents);
+    pub fn getMin(self: *const AABB, position: rl.Vector3) rl.Vector3 {
+        return position.subtract(self.half_extents);
     }
 
-    pub fn getMax(self: *const AABB) rl.Vector3 {
-        return self.center.add(self.half_extents);
+    pub fn getMax(self: *const AABB, position: rl.Vector3) rl.Vector3 {
+        return position.add(self.half_extents);
     }
 
-    pub fn rayIntersectAABB(self: *const AABB, ray: rl.Ray) rl.RayCollision {
-        const min = self.getMin();
-        const max = self.getMax();
+    pub fn rayIntersectAABB(self: *const AABB, ray: rl.Ray, position: rl.Vector3) rl.RayCollision {
+        const min = self.getMin(position);
+        const max = self.getMax(position);
 
         const x_plane = if (ray.direction.x > 0) -min.x else max.x;
         const y_plane = if (ray.direction.y > 0) -min.y else max.y;
@@ -275,9 +265,9 @@ pub const AABB = struct {
             unreachable;
         }
 
-        const abs_x = @abs(self.center.x - hit.point.x) - 0.001;
-        const abs_y = @abs(self.center.y - hit.point.y) - 0.001;
-        const abs_z = @abs(self.center.z - hit.point.z) - 0.001;
+        const abs_x = @abs(position.x - hit.point.x) - 0.001;
+        const abs_y = @abs(position.y - hit.point.y) - 0.001;
+        const abs_z = @abs(position.z - hit.point.z) - 0.001;
 
         const half_size = self.half_extents;
         hit.hit = abs_x < half_size.x and abs_y < half_size.y and abs_z < half_size.z;
@@ -285,18 +275,18 @@ pub const AABB = struct {
         return hit;
     }
 
-    pub fn rayIntersectOBB(self: *const AABB, orientation: rl.Matrix, ray: rl.Ray) rl.RayCollision {
-        const q = rl.Quaternion.fromMatrix(orientation);
-        const q_inv = rl.Quaternion.fromMatrix(orientation.transpose());
+    pub fn rayIntersectOBB(self: *const AABB, ray: rl.Ray, rotation: rl.Matrix, position: rl.Vector3) rl.RayCollision {
+        const q = rl.Quaternion.fromMatrix(rotation);
+        const q_inv = rl.Quaternion.fromMatrix(rotation.transpose());
 
-        const ray_pos_local = ray.position.subtract(self.center).rotateByQuaternion(q_inv);
+        const ray_pos_local = ray.position.subtract(position).rotateByQuaternion(q_inv);
         const ray_dir_local = ray.direction.rotateByQuaternion(q_inv);
 
         const ray_local = .{ .position = ray_pos_local, .direction = ray_dir_local };
 
-        var hit = AABB.init(rl.Vector3.zero(), self.half_extents).rayIntersectAABB(ray_local);
+        var hit = AABB.init(self.half_extents).rayIntersectAABB(ray_local, rl.Vector3.zero());
 
-        hit.point = hit.point.rotateByQuaternion(q).add(self.center);
+        hit.point = hit.point.rotateByQuaternion(q).add(position);
         hit.normal = hit.normal.rotateByQuaternion(q);
 
         return hit;

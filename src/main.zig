@@ -63,31 +63,6 @@ fn updateCamera(cam: *rl.Camera) void {
     forward = forward.rotateByQuaternion(rot);
 }
 
-fn drawColliders(world: *physics.World, cube_model: rl.Model) void {
-    for (world.colliders.items) |collider| {
-        switch (collider.shape) {
-            .Sphere => |sphere| {
-                rl.drawSphere(sphere.getCenter(), sphere.getRadius(), rl.Color.pink);
-            },
-            .AABB => |box| {
-                rl.drawCubeV(box.getCenter(), box.getSize(), rl.Color.red);
-            },
-            .OBB => |box| {
-                var axis: rl.Vector3 = undefined;
-                var angle: f32 = undefined;
-
-                rl.Quaternion.fromMatrix(box.orientation.*).toAxisAngle(&axis, &angle);
-                rl.drawModelEx(cube_model, box.aabb.getCenter(), axis, std.math.radiansToDegrees(angle), box.aabb.getSize(), rl.Color.dark_blue);
-            },
-            .Triangle => |triangle| {
-                const points = triangle.getPoints();
-                rl.drawTriangle3D(points[0], points[1], points[2], rl.Color.sky_blue);
-            },
-            else => {},
-        }
-    }
-}
-
 pub fn main() !void {
     rl.initWindow(1600, 1480, "Physics");
 
@@ -97,84 +72,83 @@ pub fn main() !void {
 
     const allocator = std.heap.page_allocator;
 
-    var sphere_shape = shape.Sphere.init(rl.Vector3.init(0, 0, 0), 1.0);
-    var aabb_shape = shape.AABB.init(rl.Vector3.init(-2.0, 0.5, 3.0), rl.Vector3.init(0.5, 0.5, 0.5));
-
-    const initial_points = [3]rl.Vector3{ rl.Vector3.init(0.0, 0.0, 0.0), rl.Vector3.init(4.0, 0.0, 0.0), rl.Vector3.init(2.0, 3.0, 0.0) };
-
-    var triangle_shape = shape.Triangle.init(initial_points[0], initial_points[1], initial_points[2]);
-    var rotating_aabb = shape.AABB.init(rl.Vector3.init(-2.0, 2.0, -2.0), rl.Vector3.init(0.5, 0.1, 0.5));
-
-    var orientation = rl.Matrix.rotateX(std.math.degreesToRadians(45.0));
-
     var world = physics.World.init(allocator);
     defer world.deinit();
 
-    var sphere_collider = physics.Collider.init(physics.ColliderType.createSphere(&sphere_shape));
-    var static_box_collider = physics.Collider.init(physics.ColliderType.createAABB(&aabb_shape));
-    var triangle_collider = physics.Collider.init(physics.ColliderType.createTriangle(&triangle_shape));
-    var rotating_box_collider = physics.Collider.init(physics.ColliderType.createOBB(&rotating_aabb, &orientation));
+    var box_shape = shape.AABB.init(rl.Vector3.init(0.5, 0.5, 0.5));
+    var box_collider = physics.Collider.init(physics.ColliderType.createAABB(&box_shape));
+    box_collider.layer.setValue(0, true);
 
-    rotating_box_collider.layer.setValue(0, true);
-    sphere_collider.layer.setValue(1, true);
-    triangle_collider.layer.setValue(2, true);
-    static_box_collider.layer.setValue(3, true);
+    var big_box_shape = shape.AABB.init(rl.Vector3.init(1.0, 1.0, 1.0));
+    var big_box_collider = physics.Collider.init(physics.ColliderType.createAABB(&big_box_shape));
+    big_box_collider.layer.setValue(0, true);
 
-    try world.addCollider(&sphere_collider);
-    try world.addCollider(&static_box_collider);
-    try world.addCollider(&triangle_collider);
-    try world.addCollider(&rotating_box_collider);
+    var box_body = physics.RigidBody.init(&box_collider, rl.Vector3.init(0, 10, 0));
+    var heavy_box_body = physics.RigidBody.init(&big_box_collider, rl.Vector3.init(0, 10, 2));
 
-    const cube_model = rl.loadModelFromMesh(rl.genMeshCube(1.0, 1.0, 1.0));
-    defer rl.unloadModel(cube_model);
+    heavy_box_body.setMass(15);
+    heavy_box_body.damping_factor = 0.6;
+    heavy_box_body.use_gravity = true;
 
-    var triangle_rot = rl.Matrix.identity();
+    box_body.setMass(10);
+    box_body.damping_factor = 0.6;
+    box_body.use_gravity = true;
+
+    try world.addRigidBody(&box_body);
+    try world.addRigidBody(&heavy_box_body);
 
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
         rl.clearBackground(rl.Color.black);
         updateCamera(&camera);
 
+        for (world.rigid_bodies.items) |body| {
+            if (body.position.y <= 0) {
+                body.addForce(world.gravity.negate().scale(1 / body.inverse_mass));
+                body.linear_velocity.y = 0;
+            }
+
+            const friction = 0.87;
+            const normal = world.gravity.negate().scale(box_body.mass);
+            const friction_force_mag = normal.scale(friction).length();
+
+            if (body.linear_velocity.y >= 0) {
+                const friction_force = body.linear_velocity.negate().normalize().scale(friction_force_mag);
+                body.addForce(friction_force);
+            }
+        }
+
+        if (rl.isKeyDown(rl.KeyboardKey.key_space)) {
+            for (world.rigid_bodies.items) |body| {
+                body.addForce(rl.Vector3.init(1000, 0, 0));
+            }
+        }
+
+        world.integrate(rl.getFrameTime());
+
         rl.gl.rlDisableBackfaceCulling();
 
         const camera_ray = rl.getScreenToWorldRay(rl.getMousePosition(), camera);
-
         const ray_mask = physics.bitmask.initFull();
 
         const hit = world.getRayIntersection(camera_ray, ray_mask);
 
-        const x_rot = std.math.degreesToRadians(0.05);
-        const y_rot = std.math.degreesToRadians(0.1);
-        const z_rot = std.math.degreesToRadians(0.15);
-
-        orientation = orientation.multiply(rl.Matrix.rotateXYZ(rl.Vector3.init(x_rot, y_rot, z_rot)));
-
-        var tri_points: [3]rl.Vector3 = undefined;
-
-        const tri_angle = std.math.degreesToRadians(0.5);
-
-        var triangle_transform = rl.Matrix.identity();
-
-        const triangle_scale = rl.Matrix.scale(1.0, 1.0, 1.0);
-        const triangle_pos = rl.Matrix.translate(2, 0, 0);
-        triangle_rot = triangle_rot.multiply(rl.Matrix.rotateX(tri_angle).multiply(rl.Matrix.rotateY(tri_angle)));
-
-        triangle_transform = triangle_transform.multiply(triangle_scale.multiply(triangle_rot).multiply(triangle_pos));
-
-        tri_points[0] = initial_points[0].transform(triangle_transform);
-        tri_points[1] = initial_points[1].transform(triangle_transform);
-        tri_points[2] = initial_points[2].transform(triangle_transform);
-
-        triangle_shape = shape.Triangle.init(tri_points[0], tri_points[1], tri_points[2]);
+        if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_left) and hit.body != null) {
+            const info = hit.info;
+            var body = hit.body.?;
+            body.addForce(info.normal.negate().scale(-world.gravity.y * body.mass * 10));
+        }
 
         camera.begin();
 
         rl.drawGrid(10, 1.0);
-        drawColliders(&world, cube_model);
 
-        if (hit.hit) {
-            rl.drawSphere(hit.point, 0.05, rl.Color.yellow);
-            rl.drawLine3D(hit.point, hit.point.add(hit.normal), rl.Color.green);
+        for (world.rigid_bodies.items, 0..) |body, index| {
+            if (index == 0) {
+                rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.ray_white);
+            } else if (index == 1) {
+                rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.pink);
+            }
         }
 
         camera.end();
