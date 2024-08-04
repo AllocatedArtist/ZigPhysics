@@ -86,6 +86,16 @@ pub fn main() !void {
     var box_body = physics.RigidBody.init(&box_collider, rl.Vector3.init(0, 10, 0));
     var heavy_box_body = physics.RigidBody.init(&big_box_collider, rl.Vector3.init(0, 10, 2));
 
+    var sphere_shape = shape.Sphere.init(0.5);
+    var sphere_collider = physics.Collider.init(physics.ColliderType.createSphere(&sphere_shape));
+    sphere_collider.layer.setValue(0, true);
+
+    var sphere_body = physics.RigidBody.init(&sphere_collider, rl.Vector3.init(-3, 5, 0));
+
+    sphere_body.setMass(10);
+    sphere_body.damping_factor = 0.56;
+    sphere_body.use_gravity = true;
+
     heavy_box_body.setMass(15);
     heavy_box_body.damping_factor = 0.6;
     heavy_box_body.use_gravity = true;
@@ -96,6 +106,7 @@ pub fn main() !void {
 
     try world.addRigidBody(&box_body);
     try world.addRigidBody(&heavy_box_body);
+    try world.addRigidBody(&sphere_body);
 
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
@@ -104,17 +115,7 @@ pub fn main() !void {
 
         for (world.rigid_bodies.items) |body| {
             if (body.position.y <= 0) {
-                body.addForce(world.gravity.negate().scale(1 / body.inverse_mass));
-                body.linear_velocity.y = 0;
-            }
-
-            const friction = 0.87;
-            const normal = world.gravity.negate().scale(box_body.mass);
-            const friction_force_mag = normal.scale(friction).length();
-
-            if (body.linear_velocity.y >= 0) {
-                const friction_force = body.linear_velocity.negate().normalize().scale(friction_force_mag);
-                body.addForce(friction_force);
+                body.addForce(world.gravity.negate().scale(body.mass * 10.0));
             }
         }
 
@@ -148,6 +149,8 @@ pub fn main() !void {
                 rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.ray_white);
             } else if (index == 1) {
                 rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.pink);
+            } else if (index == 2) {
+                rl.drawSphere(body.position, body.collider.shape.Sphere.getRadius(), rl.Color.sky_blue);
             }
         }
 
