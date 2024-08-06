@@ -72,6 +72,17 @@ pub fn main() !void {
 
     const allocator = std.heap.page_allocator;
 
+    const smiley = rl.loadTexture("assets/smiley-face.png");
+    defer rl.unloadTexture(smiley);
+
+    var smiley_ball = rl.loadModelFromMesh(rl.genMeshSphere(1.0, 10.0, 10.0));
+    defer rl.unloadModel(smiley_ball);
+
+    rl.setMaterialTexture(@ptrCast(&smiley_ball.materials[0]), .material_map_albedo, smiley);
+
+    const cube_model = rl.loadModelFromMesh(rl.genMeshCube(1.0, 1.0, 1.0));
+    defer rl.unloadModel(cube_model);
+
     var world = physics.World.init(allocator);
     defer world.deinit();
 
@@ -80,7 +91,7 @@ pub fn main() !void {
     box_collider.layer.setValue(0, true);
 
     var big_box_shape = shape.AABB.init(rl.Vector3.init(1.0, 1.0, 1.0));
-    var big_box_collider = physics.Collider.init(physics.ColliderType.createAABB(&big_box_shape));
+    var big_box_collider = physics.Collider.init(physics.ColliderType.createOBB(&big_box_shape));
     big_box_collider.layer.setValue(0, true);
 
     var box_body = physics.RigidBody.init(&box_collider, rl.Vector3.init(0, 10, 0));
@@ -119,12 +130,6 @@ pub fn main() !void {
             }
         }
 
-        if (rl.isKeyDown(rl.KeyboardKey.key_space)) {
-            for (world.rigid_bodies.items) |body| {
-                body.addForce(rl.Vector3.init(1000, 0, 0));
-            }
-        }
-
         world.integrate(rl.getFrameTime());
 
         rl.gl.rlDisableBackfaceCulling();
@@ -137,7 +142,8 @@ pub fn main() !void {
         if (rl.isMouseButtonDown(rl.MouseButton.mouse_button_left) and hit.body != null) {
             const info = hit.info;
             var body = hit.body.?;
-            body.addForce(info.normal.negate().scale(-world.gravity.y * body.mass * 10));
+            const force = camera_ray.direction.scale(100);
+            body.addForceAtPosition(force, info.point);
         }
 
         camera.begin();
@@ -148,9 +154,22 @@ pub fn main() !void {
             if (index == 0) {
                 rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.ray_white);
             } else if (index == 1) {
-                rl.drawCubeV(body.position, body.collider.shape.AABB.getSize(), rl.Color.pink);
+                var axis: rl.Vector3 = undefined;
+                var angle: f32 = undefined;
+
+                rl.Quaternion.fromMatrix(heavy_box_body.orientation).toAxisAngle(&axis, &angle);
+
+                angle = std.math.radiansToDegrees(angle);
+
+                rl.drawModelEx(cube_model, heavy_box_body.position, axis, angle, heavy_box_body.collider.shape.OBB.getSize(), rl.Color.pink);
             } else if (index == 2) {
-                rl.drawSphere(body.position, body.collider.shape.Sphere.getRadius(), rl.Color.sky_blue);
+                var axis: rl.Vector3 = undefined;
+                var angle: f32 = undefined;
+                rl.Quaternion.fromMatrix(sphere_body.orientation).toAxisAngle(&axis, &angle);
+
+                angle = std.math.radiansToDegrees(angle);
+
+                rl.drawModelEx(smiley_ball, sphere_body.position, axis, angle, rl.Vector3.init(0.5, 0.5, 0.5), rl.Color.white);
             }
         }
 

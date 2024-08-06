@@ -117,15 +117,21 @@ pub const World = struct {
                 continue;
             }
 
-            body.inverse_inertia = body.inverse_inertia.multiply(body.orientation);
+            const orientation = rl.Quaternion.fromMatrix(body.orientation).normalize().toMatrix();
+            const inverse_orientation = orientation.transpose();
+
+            body.inverse_inertia = inverse_orientation.multiply(body.inverse_inertia.multiply(body.orientation));
+
             const angular_acceleration = body.torque.transform(body.inverse_inertia);
+
             body.angular_velocity = body.angular_velocity.add(angular_acceleration.scale(delta));
 
-            var q_orientation = rl.Quaternion.fromMatrix(body.orientation);
-            const q = rl.Quaternion.fromAxisAngle(body.angular_velocity.scale(delta), 180.0).multiply(q_orientation);
-            q_orientation = q_orientation.add(q).normalize();
+            const angular_velocity_axis = body.angular_velocity.normalize();
+            const angular_velocity_angle = body.angular_velocity.length() * delta;
 
-            body.orientation = q_orientation.toMatrix();
+            const new_orientation = rl.Quaternion.fromAxisAngle(angular_velocity_axis, angular_velocity_angle).normalize();
+
+            body.orientation = body.orientation.multiply(new_orientation.toMatrix());
 
             body.angular_velocity = body.angular_velocity.scale(frame_damp);
 
@@ -227,6 +233,7 @@ pub const RigidBody = struct {
 
     pub fn clearForce(self: *RigidBody) void {
         self.force = rl.Vector3.zero();
+        self.torque = rl.Vector3.zero();
     }
 
     pub fn addForce(self: *RigidBody, force: rl.Vector3) void {
@@ -236,7 +243,7 @@ pub const RigidBody = struct {
     pub fn addForceAtPosition(self: *RigidBody, force: rl.Vector3, position: rl.Vector3) void {
         const local_pos = position.subtract(self.position);
         self.addForce(force);
-        self.torque = local_pos.crossProduct(force);
+        self.torque = self.torque.add(local_pos.crossProduct(force));
     }
 
     pub fn getLinearVelocity(self: *const RigidBody) rl.Vector3 {
