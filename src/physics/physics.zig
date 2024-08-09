@@ -5,20 +5,31 @@ const rl = @import("raylib");
 pub const bitmask = std.bit_set.IntegerBitSet(64);
 
 pub const ColliderType = union(enum) {
-    Sphere: *shapes.Sphere,
-    AABB: *shapes.AABB,
-    OBB: *shapes.AABB,
+    Sphere: shapes.Sphere,
+    AABB: shapes.AABB,
+    OBB: shapes.AABB,
 
-    pub fn createAABB(aabb: *shapes.AABB) ColliderType {
+    pub fn createAABB(aabb: shapes.AABB) ColliderType {
         return .{ .AABB = aabb };
     }
 
-    pub fn createOBB(aabb: *shapes.AABB) ColliderType {
+    pub fn createOBB(aabb: shapes.AABB) ColliderType {
         return .{ .OBB = aabb };
     }
 
-    pub fn createSphere(sphere: *shapes.Sphere) ColliderType {
+    pub fn createSphere(sphere: shapes.Sphere) ColliderType {
         return .{ .Sphere = sphere };
+    }
+};
+
+const RayHitInfo = struct { info: rl.RayCollision, body: ?*RigidBody };
+const CollisionInfo = struct {
+    contact_points: [2]rl.Vector3,
+    distance: f32,
+    normal: rl.Vector3,
+
+    pub fn init() CollisionInfo {
+        return .{ .contact_points = .{ rl.Vector3.zero(), rl.Vector3.zero() }, .distance = 0.0, .normal = rl.Vector3.zero() };
     }
 };
 
@@ -31,9 +42,122 @@ pub const Collider = struct {
         const empty = bitmask.initEmpty();
         return .{ .shape = shape, .mask = empty, .layer = empty };
     }
-};
 
-const RayHitInfo = struct { info: rl.RayCollision, body: ?*RigidBody };
+    fn getColliderIndex(collider: *const Collider, comptime index: u2) u8 {
+        return switch (collider.shape) {
+            ColliderType.AABB => 0b1 << (index * 2),
+            ColliderType.Sphere => 0b10 << (index * 2),
+            else => unreachable,
+        };
+    }
+
+    pub fn intersectCollider(self: *const Collider, other: *const Collider, pos_1: rl.Vector3, pos_2: rl.Vector3) ?CollisionInfo {
+        const a = getColliderIndex(self, 0);
+        const b = getColliderIndex(other, 1);
+        const c = a | b;
+
+        return switch (c) {
+            0b1010 => sphereVSphere(&self.shape.Sphere, &other.shape.Sphere, pos_1, pos_2),
+            0b0101 => aabbVAABB(&self.shape.AABB, &other.shape.AABB, pos_1, pos_2),
+            0b1001 => aabbVSphere(&self.shape.AABB, &other.shape.Sphere, pos_1, pos_2, false),
+            0b0110 => aabbVSphere(&other.shape.AABB, &self.shape.Sphere, pos_2, pos_1, true),
+            else => unreachable,
+        };
+    }
+
+    fn sphereVSphere(a: *const shapes.Sphere, b: *const shapes.Sphere, pos_1: rl.Vector3, pos_2: rl.Vector3) ?CollisionInfo {
+        const distance2 = pos_2.distanceSqr(pos_1);
+        const radius_sum2: f32 = std.math.pow(f32, a.getRadius() + b.getRadius(), 2);
+
+        var hit = CollisionInfo.init();
+
+        if (distance2 > radius_sum2) {
+            return null;
+        }
+
+        hit.distance = (a.getRadius() + b.getRadius()) - std.math.sqrt(distance2);
+        hit.normal = pos_2.subtract(pos_1).normalize();
+        hit.contact_points[0] = pos_1.add(hit.normal.scale(a.getRadius()));
+        hit.contact_points[1] = pos_2.add(hit.normal.scale(a.getRadius()).negate());
+
+        return hit;
+    }
+
+    fn aabbVAABB(a: *const shapes.AABB, b: *const shapes.AABB, pos_1: rl.Vector3, pos_2: rl.Vector3) ?CollisionInfo {
+        const delta_pos = pos_2.subtract(pos_1);
+        const half_extents_sum = a.half_extents.add(b.half_extents);
+
+        var hit = CollisionInfo.init();
+
+        const delta_x = @abs(delta_pos.x);
+        const delta_y = @abs(delta_pos.y);
+        const delta_z = @abs(delta_pos.z);
+
+        if (delta_x >= half_extents_sum.x or delta_y >= half_extents_sum.y or delta_z >= half_extents_sum.z) {
+            return null;
+        }
+
+        const normals = [_]rl.Vector3{
+            rl.Vector3.init(-1, 0, 0), //left
+            rl.Vector3.init(1, 0, 0), //right
+            rl.Vector3.init(0, -1, 0), //bottom
+            rl.Vector3.init(0, 1, 0), //top
+            rl.Vector3.init(0, 0, -1), //forward
+            rl.Vector3.init(0, 0, 1), //back
+        };
+
+        const min_a = a.getMin(pos_1);
+        const max_a = a.getMax(pos_1);
+
+        const min_b = b.getMin(pos_2);
+        const max_b = b.getMax(pos_2);
+
+        const distances = [_]f32{
+            max_b.x - min_a.x,
+            max_a.x - min_b.x,
+
+            max_b.y - min_a.y,
+            max_a.y - min_b.y,
+
+            max_b.z - min_a.z,
+            max_a.z - min_b.z,
+        };
+
+        hit.distance = std.math.inf(f32);
+
+        for (0..6) |i| {
+            if (distances[i] < hit.distance) {
+                hit.distance = distances[i];
+                hit.normal = normals[i];
+            }
+        }
+
+        return hit;
+    }
+
+    fn aabbVSphere(a: *const shapes.AABB, b: *const shapes.Sphere, pos_1: rl.Vector3, pos_2: rl.Vector3, flipped: bool) ?CollisionInfo {
+        const delta = pos_2.subtract(pos_1);
+        const closest_point = delta.clamp(a.half_extents.negate(), a.half_extents);
+        const local_point = delta.subtract(closest_point);
+
+        const distance2 = local_point.lengthSqr();
+        const radius2 = std.math.pow(f32, b.getRadius(), 2);
+
+        var hit = CollisionInfo.init();
+
+        if (distance2 > radius2) {
+            return null;
+        }
+
+        hit.distance = local_point.length() - b.getRadius();
+        hit.normal = if (flipped) local_point.normalize() else local_point.negate().normalize();
+
+        hit.contact_points[0] = rl.Vector3.zero();
+        hit.contact_points[1] = hit.normal.negate().scale(b.getRadius());
+
+        return hit;
+    }
+};
 
 pub const World = struct {
     colliders: std.ArrayList(*Collider),
@@ -84,7 +208,7 @@ pub const World = struct {
 
         for (self.rigid_bodies.items) |body| {
             const new_hit = getRayIntersectionCollider(ray, body, mask);
-            if (new_hit.distance < hit_default.distance and new_hit.hit) {
+            if (new_hit.distance < result.info.distance and new_hit.hit) {
                 result.info = new_hit;
                 result.body = body;
             }
@@ -136,6 +260,25 @@ pub const World = struct {
             body.angular_velocity = body.angular_velocity.scale(frame_damp);
 
             body.clearForce();
+        }
+
+        self.resolveCollisions();
+    }
+
+    fn resolveBodyCollisions(b1: *RigidBody, b2: *RigidBody) void {
+        const info = b1.collider.intersectCollider(b2.collider, b1.position, b2.position);
+        if (info) |hit| {
+            b1.position = b1.position.subtract(hit.normal.scale(hit.distance));
+        }
+    }
+
+    fn resolveCollisions(self: *World) void {
+        for (self.rigid_bodies.items[0..], 0..) |b1, i| {
+            for (self.rigid_bodies.items[0..], 0..) |b2, j| {
+                if (i == j) continue;
+                if (b1.mass == 0.0) continue;
+                resolveBodyCollisions(b1, b2);
+            }
         }
     }
 };
@@ -256,8 +399,8 @@ test "world leak" {
     var world = World.init(allocator);
     defer world.deinit();
 
-    var box_shape = shapes.AABB.init(rl.Vector3.zero());
-    var collider = Collider.init(ColliderType.createAABB(&box_shape));
+    const box_shape = shapes.AABB.init(rl.Vector3.zero());
+    var collider = Collider.init(ColliderType.createAABB(box_shape));
 
     try world.addCollider(&collider);
 }
@@ -267,13 +410,13 @@ test "inverse tensor" {
     var world = World.init(allocator);
     defer world.deinit();
 
-    var box_shape = shapes.AABB.init(rl.Vector3.init(0.5, 0.5, 0.5));
-    var collider = Collider.init(ColliderType.createAABB(&box_shape));
+    const box_shape = shapes.AABB.init(rl.Vector3.init(0.5, 0.5, 0.5));
+    var collider = Collider.init(ColliderType.createAABB(box_shape));
     var body = RigidBody.init(&collider, rl.Vector3.zero());
     body.setMass(1);
 
-    var sphere_shape = shapes.Sphere.init(1.0);
-    var sphere_collider = Collider.init(ColliderType.createSphere(&sphere_shape));
+    const sphere_shape = shapes.Sphere.init(1.0);
+    var sphere_collider = Collider.init(ColliderType.createSphere(sphere_shape));
     var ball_body = RigidBody.init(&sphere_collider, rl.Vector3.zero());
     ball_body.setMass(1);
 
